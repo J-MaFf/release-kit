@@ -23,6 +23,8 @@ the major tag `v1` points at it. The first outside caller is J-MaFf/winget-app-s
 | `.github/workflows/ci.yml` | Runs the step tests, then a dry run on `tests/fixtures/` whose manifest a second job checks with `sha256sum`, `stat` and `jq` |
 | `tests/Test-ReleaseSteps.ps1`, `tests/extract_steps.py` | Runs each pwsh step of `release.yml` in a throwaway repository, including the inputs it must refuse |
 | `tests/fixtures/` | Files and a changelog the tests and the dry run release |
+| `src/Update-FromGitHubRelease.ps1` | The shared updater (5.1 and 7): latest release, manifest, hash compare, checked downloads, swap with rollback; never throws for an update problem (#4) |
+| `tests/Update-FromGitHubRelease.Tests.ps1`, `tests/Smoke-WindowsPowerShell.ps1` | The updater's Pester tests with the web mocked, and a Pester-free smoke test for Windows PowerShell 5.1 |
 
 ### Resolved Issues
 
@@ -35,13 +37,13 @@ the major tag `v1` points at it. The first outside caller is J-MaFf/winget-app-s
 | Issue | Description |
 |---|---|
 | [#3](https://github.com/J-MaFf/release-kit/issues/3) | Release release-kit itself through its own workflow (v1.0.0) |
+| [#4](https://github.com/J-MaFf/release-kit/issues/4) | Add Update-FromGitHubRelease, the shared PowerShell updater |
 
 ## Natural Next Steps
 
 - Cut J-MaFf/winget-app-setup's first release through it once J-MaFf/winget-app-setup#285 and #287 merge.
-- A shared PowerShell updater (`Update-FromGitHubRelease`): latest release, manifest, hash compare,
-  verified download, replace in one step, keep running on failure. Pilot it on a repository with
-  something long-lived installed on machines.
+- Release `v1.1.0` with the updater, then pilot it in J-MaFf/powershell-profile-system, which today
+  `git pull`s `main` on every shell start.
 - A tag ruleset here so only the owner can move `v1`.
 
 ## Prerequisites to Run

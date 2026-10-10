@@ -27,6 +27,44 @@ jobs:
         shell: pwsh
         run: ./tests/Test-ReleaseSteps.ps1
 
+  updater-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, shell: pwsh }
+          - { os: windows-latest, shell: pwsh }
+          - { os: windows-latest, shell: powershell }
+    runs-on: ${{ matrix.os }}
+    name: updater-tests (${{ matrix.os }}, ${{ matrix.shell }})
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Pester 5.7.1
+        run: |
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -eq [version]'5.7.1' })) {
+              Install-Module Pester -RequiredVersion 5.7.1 -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+
+      - name: Test Update-FromGitHubRelease
+        run: |
+          Import-Module Pester -RequiredVersion 5.7.1
+          $configuration = New-PesterConfiguration
+          $configuration.Run.Path = 'tests/Update-FromGitHubRelease.Tests.ps1'
+          $configuration.Run.Exit = $true
+          $configuration.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $configuration
+
+      - name: Smoke test without Pester
+        if: ${{ matrix.shell == 'powershell' }}
+        run: ./tests/Smoke-WindowsPowerShell.ps1
+
   dry-run:
     permissions:
       contents: write
