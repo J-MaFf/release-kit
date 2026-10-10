@@ -119,7 +119,36 @@ A consumer that keeps itself current does what the ReSkate launcher does:
 For a private repository the `releases/latest` call needs a token (`gh auth token`, or a read-only
 fine-grained token); without one GitHub answers 404.
 
-A shared PowerShell updater that does all of this is planned.
+### The shared updater: `Update-FromGitHubRelease`
+
+`src/Update-FromGitHubRelease.ps1` does all of that, in Windows PowerShell 5.1 and PowerShell 7.
+Each release of release-kit carries it as an asset. Copy it into your repository, and list it in
+your release workflow's `files`, so it updates itself with everything else:
+
+```powershell
+. "$InstallPath/Update-FromGitHubRelease.ps1"
+$result = Update-FromGitHubRelease -Repository J-MaFf/my-tool -InstallPath $InstallPath
+switch ($result.Status) {
+    'Updated'  { Write-Host "Updated to $($result.Tag): $($result.Updated -join ', ')" }
+    'Failed'   { }   # it already warned; the files it had are untouched
+}
+```
+
+- **Status** is `UpToDate`, `Updated`, `Skipped` (under `-WhatIf`) or `Failed`. It never throws
+  for an update problem; on `Failed` it warns (`-WarningAction SilentlyContinue` to quiet it) and
+  keeps the files it has.
+- **What it updates:** every file the manifest lists, at its manifest `path` under
+  `-InstallPath`, or only the paths given with `-Path`. Files the manifest doesn't list are left
+  alone. A path that could leave `-InstallPath` (`..`, rooted, a drive) fails the update.
+- **How it replaces:** every changed file is downloaded as `<file>.new` and checked for size and
+  SHA-256 before anything is replaced. Then all are swapped in; if one swap fails, every file
+  already swapped is put back.
+- **`-Token`** for a private repository; it then downloads through the API's asset URL.
+- **`-VerifyAttestation`** also runs `gh attestation verify --signer-workflow
+  J-MaFf/release-kit/.github/workflows/release.yml` on each download (needs `gh`; public
+  repositories on Free and Pro plans).
+- **No throttle of its own:** a caller that runs often (a shell profile) should check at most once
+  a day or so, to stay well inside GitHub's 60 requests an hour.
 
 ## Versions of release-kit
 
@@ -130,9 +159,13 @@ exactly. A change that would break a caller gets a new major tag.
 ## Develop
 
 ```powershell
-pwsh -File tests/Test-ReleaseSteps.ps1   # needs git, pwsh 7, Python 3 + PyYAML
+pwsh -File tests/Test-ReleaseSteps.ps1                                # needs git, pwsh 7, Python 3 + PyYAML
+Invoke-Pester tests/Update-FromGitHubRelease.Tests.ps1                # Pester 5 or 6
+powershell.exe -NoProfile -File tests/Smoke-WindowsPowerShell.ps1     # Windows PowerShell 5.1, no Pester
 ```
 
-It runs every PowerShell step of `release.yml` in a throwaway repository, including the cases that
-must fail. CI (`.github/workflows/ci.yml`) runs it, then runs `release.yml` as a dry run on
-`tests/fixtures/` and checks the manifest it built with `sha256sum`, `stat` and `jq`.
+The first runs every PowerShell step of `release.yml` in a throwaway repository, including the
+cases that must fail. The second tests the updater with the web mocked; the third runs it under
+Windows PowerShell 5.1 with stand-in web functions. CI (`.github/workflows/ci.yml`) runs all three
+(the updater on Linux, and on Windows under both PowerShells), then runs `release.yml` as a dry run
+on `tests/fixtures/` and checks the manifest it built with `sha256sum`, `stat` and `jq`.

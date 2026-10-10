@@ -20,3 +20,4 @@ jobs:
     with:
       files: |
         .github/workflows/release.yml
+        src/Update-FromGitHubRelease.ps1

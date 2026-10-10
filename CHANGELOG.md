@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-10
+
+### Added
+
+- Added `src/Update-FromGitHubRelease.ps1`, the shared updater for Windows PowerShell 5.1 and
+  PowerShell 7: it reads the latest release's manifest, compares each file's size and SHA-256,
+  downloads and checks every changed file (optionally its attestation) before replacing any, swaps
+  them in with a rollback if one fails, and never throws for an update problem. Each release of
+  release-kit carries it as an asset ([#4](https://github.com/J-MaFf/release-kit/issues/4)).
+- Added CI for the updater: its Pester tests on Linux, and on Windows under PowerShell 7 and
+  Windows PowerShell 5.1, plus a smoke test without Pester ([#4](https://github.com/J-MaFf/release-kit/issues/4)).
+
 ## [1.0.0] - 2026-10-10
 
 ### Added
