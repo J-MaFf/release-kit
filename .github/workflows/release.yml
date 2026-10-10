@@ -1,0 +1,207 @@
+# Publishes a GitHub release from a tag: the listed files as assets, a release-manifest.json that
+# pins each one by SHA-256 and size, and (by default) a signed build-provenance attestation for every
+# asset, so a consumer can prove which workflow, repository and commit produced it.
+#
+# Call it from a repository's own workflow:
+#
+#   on:
+#     push:
+#       tags: ['v*']
+#   jobs:
+#     release:
+#       permissions:
+#         contents: write
+#         id-token: write
+#         attestations: write
+#       uses: J-MaFf/release-kit/.github/workflows/release.yml@v1
+#       with:
+#         files: |
+#           dist/my-tool.ps1
+#           README.md
+#
+# See README.md for the manifest format and how to verify a release.
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      files:
+        description: Newline-separated paths, relative to the repository root, to publish. Each is uploaded under its file name, so two paths may not share one.
+        required: true
+        type: string
+      tag:
+        description: The tag to release (vMAJOR.MINOR.PATCH, optionally -prerelease). Default the tag that started the run.
+        required: false
+        type: string
+        default: ''
+      changelog:
+        description: Keep a Changelog file whose "## [VERSION]" section becomes the release notes. Empty for GitHub's generated notes.
+        required: false
+        type: string
+        default: CHANGELOG.md
+      attest:
+        description: Attest every asset. GitHub Free and Pro support attestations in public repositories only, so set false for a private one.
+        required: false
+        type: boolean
+        default: true
+      dry-run:
+        description: Build and check the manifest and upload it as a workflow artifact, without attesting or publishing.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      manifest-sha256:
+        description: SHA-256 of the published release-manifest.json.
+        value: ${{ jobs.release.outputs.manifest-sha256 }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      manifest-sha256: ${{ steps.manifest.outputs.manifest-sha256 }}
+    steps:
+      - name: Resolve the tag
+        id: tag
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          $tag = $env:INPUT_TAG
+          if (-not $tag) {
+              if ($env:REF_TYPE -ne 'tag') { throw "No tag: pass inputs.tag, or start the run from a tag push (this run is on $env:REF_TYPE '$env:REF_NAME')." }
+              $tag = $env:REF_NAME
+          }
+          if ($tag -notmatch '^v(?<version>(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?<pre>-[0-9A-Za-z][0-9A-Za-z.-]*)?)\z') {
+              throw "Tag '$tag' is not vMAJOR.MINOR.PATCH (optionally -prerelease)."
+          }
+          # A dry run checks out the commit that started it; a release checks out the tag itself.
+          $ref = if ($env:DRY_RUN -eq 'true') { '' } else { "refs/tags/$tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($Matches.version)" >> $env:GITHUB_OUTPUT
+          "prerelease=$([bool]$Matches.pre)".ToLowerInvariant() >> $env:GITHUB_OUTPUT
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
+          persist-credentials: false
+
+      - name: Build the manifest
+        id: manifest
+        shell: pwsh
+        env:
+          FILES: ${{ inputs.files }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $commit = "$(git rev-parse HEAD)".Trim()
+          if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-f]{40}\z') { throw "git rev-parse HEAD returned '$commit', not a commit id." }
+          $paths = @($env:FILES -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if (-not $paths) { throw 'inputs.files lists no files.' }
+
+          $dist = Join-Path $env:RUNNER_TEMP 'release-dist'
+          $null = New-Item -ItemType Directory -Path $dist -Force
+          $files = [ordered]@{}
+          foreach ($path in $paths) {
+              if ([System.IO.Path]::IsPathRooted($path) -or ($path -split '[\\/]') -contains '..') {
+                  throw "'$path' must be a path inside the repository."
+              }
+              $source = Join-Path $env:GITHUB_WORKSPACE $path
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "'$path' is not a file at $commit." }
+              $name = Split-Path -Leaf $path
+              if ($name -eq 'release-manifest.json') { throw "'$path' would replace the manifest; rename it." }
+              if ($files.Contains($name)) { throw "'$path' and '$($files[$name].path)' would both be uploaded as '$name'." }
+              # Copied byte for byte: the hash is of the bytes git checked out, which is what the asset serves.
+              Copy-Item -LiteralPath $source -Destination (Join-Path $dist $name)
+              $item = Get-Item -LiteralPath (Join-Path $dist $name)
+              $files[$name] = [ordered]@{
+                  path   = $path -replace '\\', '/'
+                  url    = "asset:$name"
+                  sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                  size   = $item.Length
+              }
+          }
+
+          $manifest = [ordered]@{
+              schema     = 1
+              repository = $env:REPOSITORY
+              tag        = $env:TAG
+              version    = $env:VERSION
+              commit     = $commit
+              files      = $files
+          }
+          $manifestPath = Join-Path $dist 'release-manifest.json'
+          [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5) + "`n", [System.Text.UTF8Encoding]::new($false))
+          Get-Content -Raw -LiteralPath $manifestPath
+          "manifest-sha256=$((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "dist=$dist" >> $env:GITHUB_OUTPUT
+
+      - name: Take the release notes from the changelog
+        id: notes
+        if: ${{ inputs.changelog != '' }}
+        shell: pwsh
+        env:
+          CHANGELOG: ${{ inputs.changelog }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -LiteralPath $env:CHANGELOG -PathType Leaf)) { throw "No changelog at '$env:CHANGELOG'; pass changelog: '' for generated notes." }
+          $lines = Get-Content -LiteralPath $env:CHANGELOG
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match ('^## \[' + [regex]::Escape($env:VERSION) + '\]')) { $start = $i; break }
+          }
+          if ($start -lt 0) { throw "$env:CHANGELOG has no '## [$env:VERSION]' section. Move the [Unreleased] entries under it before tagging." }
+          $end = $lines.Count
+          for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match '^## \[') { $end = $i; break }
+          }
+          $body = ($lines[($start + 1)..($end - 1)] -join "`n").Trim()
+          if (-not $body) { throw "The '## [$env:VERSION]' section of $env:CHANGELOG is empty." }
+          $path = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          [System.IO.File]::WriteAllText($path, $body + "`n", [System.Text.UTF8Encoding]::new($false))
+          "path=$path" >> $env:GITHUB_OUTPUT
+
+      - name: Upload the dry run
+        if: ${{ inputs.dry-run }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dry-run
+          path: ${{ steps.manifest.outputs.dist }}
+          if-no-files-found: error
+
+      - name: Attest the assets
+        if: ${{ !inputs.dry-run && inputs.attest }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.manifest.outputs.dist }}/*
+
+      - name: Publish the release
+        if: ${{ !inputs.dry-run }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+          NOTES: ${{ steps.notes.outputs.path }}
+          DIST: ${{ steps.manifest.outputs.dist }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arguments = @('release', 'create', $env:TAG, '--verify-tag', '--title', $env:TAG)
+          $arguments += if ($env:NOTES) { @('--notes-file', $env:NOTES) } else { @('--generate-notes') }
+          # A prerelease never becomes "latest", so a consumer that follows latest skips it.
+          $arguments += if ($env:PRERELEASE -eq 'true') { @('--prerelease', '--latest=false') } else { @('--latest') }
+          $arguments += @(Get-ChildItem -LiteralPath $env:DIST -File | ForEach-Object FullName)
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed (exit code $LASTEXITCODE)." }

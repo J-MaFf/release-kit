@@ -1,0 +1,86 @@
+# Runs release.yml as a dry run on the fixtures and checks its manifest against the files with
+# tools of its own (sha256sum, stat, jq), so a bug in the manifest step cannot vouch for itself.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  step-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install PyYAML
+        run: python3 -m pip install --user --disable-pip-version-check pyyaml==6.0.3
+
+      - name: Test the release steps
+        shell: pwsh
+        run: ./tests/Test-ReleaseSteps.ps1
+
+  dry-run:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: v0.0.0-test
+      changelog: tests/fixtures/CHANGELOG.md
+      dry-run: true
+      files: |
+        tests/fixtures/hello.ps1
+        tests/fixtures/nested/data.txt
+
+  check:
+    needs: dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the dry run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dry-run
+          path: dist
+
+      - name: Check the manifest
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.dry-run.outputs.manifest-sha256 }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          m=dist/release-manifest.json
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ "$(sha256sum "$m" | cut -d' ' -f1)" = "$EXPECTED_MANIFEST_SHA256" ] || fail "manifest-sha256 output does not match the uploaded manifest"
+          [ "$(jq -r .schema "$m")" = 1 ] || fail "schema is not 1"
+          [ "$(jq -r .tag "$m")" = v0.0.0-test ] || fail "tag is wrong"
+          [ "$(jq -r .version "$m")" = 0.0.0-test ] || fail "version is wrong"
+          [ "$(jq -r .repository "$m")" = "$REPOSITORY" ] || fail "repository is wrong"
+          [ "$(jq -r .commit "$m")" = "$EXPECTED_COMMIT" ] || fail "commit is not the checked-out commit"
+          [ "$(jq -r '.files | keys | join(",")' "$m")" = "data.txt,hello.ps1" ] || fail "file list is wrong"
+
+          for path in tests/fixtures/hello.ps1 tests/fixtures/nested/data.txt; do
+            name=$(basename "$path")
+            cmp -s "$path" "dist/$name" || fail "dist/$name is not a byte-for-byte copy of $path"
+            [ "$(jq -r --arg n "$name" '.files[$n].path' "$m")" = "$path" ] || fail "$name: path is wrong"
+            [ "$(jq -r --arg n "$name" '.files[$n].url' "$m")" = "asset:$name" ] || fail "$name: url is wrong"
+            [ "$(jq -r --arg n "$name" '.files[$n].sha256' "$m")" = "$(sha256sum "$path" | cut -d' ' -f1)" ] || fail "$name: sha256 is wrong"
+            [ "$(jq -r --arg n "$name" '.files[$n].size' "$m")" = "$(stat -c %s "$path")" ] || fail "$name: size is wrong"
+          done
+          echo "Manifest checks passed."
+          cat "$m"

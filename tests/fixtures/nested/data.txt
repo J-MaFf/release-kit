@@ -1,0 +1,1 @@
+A second fixture in a subfolder: published as data.txt, its manifest path keeps the folder.
