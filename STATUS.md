@@ -9,9 +9,9 @@ and update themselves from releases. The design follows the ReSkate launcher's u
 
 ## Current State — 2026-10-10
 
-The workflow is merged ([#2](https://github.com/J-MaFf/release-kit/pull/2)). `v1.0.0` is released
+The workflow is merged ([#2](https://github.com/J-MaFf/release-kit/pull/2)). `v1.0.0` and `v1.1.0` (with the updater, [#6](https://github.com/J-MaFf/release-kit/pull/6)) are released
 through release-kit's own `publish.yml` ([#3](https://github.com/J-MaFf/release-kit/issues/3)), and
-the major tag `v1` points at it. The first outside caller is J-MaFf/winget-app-setup
+the major tag `v1` points at the newest. The first outside caller is J-MaFf/winget-app-setup
 (J-MaFf/winget-app-setup#287).
 
 ### Components
@@ -23,7 +23,7 @@ the major tag `v1` points at it. The first outside caller is J-MaFf/winget-app-s
 | `.github/workflows/ci.yml` | Runs the step tests, then a dry run on `tests/fixtures/` whose manifest a second job checks with `sha256sum`, `stat` and `jq` |
 | `tests/Test-ReleaseSteps.ps1`, `tests/extract_steps.py` | Runs each pwsh step of `release.yml` in a throwaway repository, including the inputs it must refuse |
 | `tests/fixtures/` | Files and a changelog the tests and the dry run release |
-| `src/Update-FromGitHubRelease.ps1` | The shared updater (5.1 and 7): latest release, manifest, hash compare, checked downloads, swap with rollback; never throws for an update problem (#4) |
+| `src/Update-FromGitHubRelease.ps1` | The shared updater (5.1 and 7): latest release, manifest, hash compare, checked downloads, swap with rollback; never throws for an update problem (#6) |
 | `tests/Update-FromGitHubRelease.Tests.ps1`, `tests/Smoke-WindowsPowerShell.ps1` | The updater's Pester tests with the web mocked, and a Pester-free smoke test for Windows PowerShell 5.1 |
 
 ### Resolved Issues
@@ -31,19 +31,17 @@ the major tag `v1` points at it. The first outside caller is J-MaFf/winget-app-s
 | Issue | Description | PR |
 |---|---|---|
 | [#1](https://github.com/J-MaFf/release-kit/issues/1) | Add the shared release workflow (manifest + attestations) | [#2](https://github.com/J-MaFf/release-kit/pull/2) |
+| [#3](https://github.com/J-MaFf/release-kit/issues/3) | Release release-kit itself through its own workflow (v1.0.0) | [#5](https://github.com/J-MaFf/release-kit/pull/5) |
+| [#4](https://github.com/J-MaFf/release-kit/issues/4) | Add Update-FromGitHubRelease, the shared PowerShell updater | [#6](https://github.com/J-MaFf/release-kit/pull/6) |
 
 ### Open Issues
 
-| Issue | Description |
-|---|---|
-| [#3](https://github.com/J-MaFf/release-kit/issues/3) | Release release-kit itself through its own workflow (v1.0.0) |
-| [#4](https://github.com/J-MaFf/release-kit/issues/4) | Add Update-FromGitHubRelease, the shared PowerShell updater |
+None.
 
 ## Natural Next Steps
 
 - Cut J-MaFf/winget-app-setup's first release through it once J-MaFf/winget-app-setup#285 and #287 merge.
-- Release `v1.1.0` with the updater, then pilot it in J-MaFf/powershell-profile-system, which today
-  `git pull`s `main` on every shell start.
+- Pilot the updater in J-MaFf/powershell-profile-system (J-MaFf/powershell-profile-system#14), which today `git pull`s `main` on every shell start, and release it there.
 - A tag ruleset here so only the owner can move `v1`.
 
 ## Prerequisites to Run
