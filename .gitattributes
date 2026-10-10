@@ -1,0 +1,2 @@
+# LF everywhere, so a file's bytes, and so its manifest hash, are the same on every checkout.
+* text=auto eol=lf
